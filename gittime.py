@@ -46,7 +46,7 @@ def addEdge(node1, node2, components, nodeToComponentMap):
     maxComponent = max(component1, component2)
 
     if minComponent == maxComponent:
-        return
+        return 
         
     components[minComponent] |= components[maxComponent]
     for node in components[maxComponent]:
