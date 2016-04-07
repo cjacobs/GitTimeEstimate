@@ -1,27 +1,9 @@
 from subprocess import Popen, PIPE
 
-
-
 # parses git command:
-# git log --pretty=format:"#### %ae %at" --name-status
-## better:
-
 # git log --pretty=format:"####%x09%an%x09%at" --numstat --diff-filter=AM
 
-
-def estimateTime(directory):
-    gitlog = callGit(directory)
-    lines = gitlog.split('\n')
-    uniqueThings = parseLines(lines)
-    print "{} person-weeks of effort".format(len(uniqueThings))
-    # return uniqueThings    
-
-def callGit(directory):
-    handle = Popen(['git', '-C', directory, 'log', '--all', '--pretty=format:####%x09%an%x09%at', '--numstat', '--diff-filter=AM'], shell=True, stdout=PIPE)    
-    out, err = handle.communicate()
-    return out
-    
-gStringDict = {}
+gStringDict = {}   
 def memoizeString(s):
     global gStringDict
     if s not in gStringDict:
@@ -30,35 +12,183 @@ def memoizeString(s):
         return val
     else:
         return gStringDict[s]
+
+def parseInt(s):
+    try:
+        return int(s)
+    except:
+        return 0
+
+#
+# finding connected components in graphs
+#
+
+# nodeToComponentMap = {} # map of node ID -> graph component ID
+# componentNodes = {} # map of component ID -> list of nodes
+
+# node1, node2 are ints. Use memoizeString to convert strings to ints
+def addEdge(node1, node2, components, nodeToComponentMap):
+    if node1 not in nodeToComponentMap:
+        # new node, gets its own graph component
+        assert node1 not in components
+        components[node1] = {node1}
+        nodeToComponentMap[node1] = node1
+
+    if node2 not in nodeToComponentMap:
+        # new node, gets its own graph component
+        assert node2 not in components
+        components[node2] = {node2}
+        nodeToComponentMap[node2] = node2
+
+    component1 = nodeToComponentMap[node1]
+    component2 = nodeToComponentMap[node2]
+    minComponent = min(component1, component2)
+    maxComponent = max(component1, component2)
+
+    if minComponent == maxComponent:
+        return
         
+    components[minComponent] |= components[maxComponent]
+    for node in components[maxComponent]:
+        nodeToComponentMap[node] = minComponent
+    components[maxComponent] = set()
+    
+def getNodeToComponentMap(componentNodes):
+    result = {}
+    for componentId in componentNodes:
+        nodes = componentNodes[componentId]
+        for node in nodes:
+            result[node] = componentId
+    return result
+
+#
+#
+#    
+def getGetDiffFromEmptySummary(gitDirectory):
+    emptyTreeSha = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
+    handle = Popen(['git', '-C', gitDirectory, 'diff', '--shortstat', emptyTreeSha], shell=True, stdout=PIPE)
+    out, err = handle.communicate()
+    return out.split('\n')
+
+def getGitLog(gitDirectory):
+    handle = Popen(['git', '-C', gitDirectory, 'log', '--all', '--pretty=format:####%x09%an%x09%ae%x09%at', '--numstat', '--diff-filter=AM'], shell=True, stdout=PIPE)
+    out, err = handle.communicate()
+    return out.split('\n')
+ 
 def getTuple(username, filename, weekId):
     # return (memoizeString(username), memoizeString(filename), weekId)
     return (memoizeString(username), weekId)
 
-def parseFile(filename):
-    lines = []
-    with open(filename) as fp:
-        lines = fp.readlines()
-    return parseLines(lines)
+class FileInfo(object):
+    def __init__(self, additions, deletions, filename):
+        self.additions = additions
+        self.deletions = deletions
+        self.filename = filename
+
+class Commit(object):
+    def __init__(self, user, email, time, week):
+        self.user = user
+        self.email = email
+        self.time = time
+        self.week = week
+        self.fileInfo = []
+            
+
+def processLog(lines):
+    commits = []
     
-def parseLines(lines):
-    # TODO: keep a record of unique user, week, filename triplets
-    # map from (username,week) -> set(filename) would work
-    # so would set(username, week, filename)
-    uniqueTuples = set()
-    currentUser = ''
-    currentTime = 0 # in seconds
-    currentWeek = 0
+    # a commit looks like this: [username, email, time, week, [numAdditions, numDeletions, filename]]
+    currentCommit = None
     for line in lines:
         parts = line.split('\t')
         if(line.startswith('####')):
-            currentUser = parts[1]
-            currentTime = int(parts[2])
-            currentWeek = int(currentTime / (60*60*24*7))
+            if currentCommit:
+                commits.append(currentCommit)
+            user = parts[1][:50] 
+            email = parts[2][:50] 
+            time = int(parts[3])
+            week = int(time / (60*60*24*7))
+            currentCommit = Commit(user, email, time, week)
         elif len(line) > 1:
-            numAdds = parts[0]
-            subSub = parts[1]
+            numAdditions = parseInt(parts[0])
+            numDeletions = parseInt(parts[1])
             filename = parts[2]
+            currentCommit.fileInfo.append(FileInfo(numAdditions, numDeletions, filename))
+    if currentCommit:
+        commits.append(currentCommit)            
+    return commits
+        
+def summarizeLog(commits):
+    uniqueTuples = set()
+    uniqueUsers = set()
+    uniqueEmails = set()
+    totalLinesAdded = 0
+    totalLines = 0
+
+    for commit in commits:
+        currentUser = commit.user
+        currentEmail = commit.email
+        currentTime = commit.time
+        currentWeek = commit.week
+        
+        uniqueUsers.add(currentUser)
+        uniqueEmails.add(currentEmail)
+        for fileInfo in commit.fileInfo:
+            numAdditions = fileInfo.additions
+            numDeletions = fileInfo.deletions
+            filename = fileInfo.filename
             uniqueTuples.add(getTuple(currentUser, filename, currentWeek))
-    return uniqueTuples
+            totalLinesAdded += numAdditions
+            totalLines += (numAdditions-numDeletions)
+    return len(uniqueTuples), len(uniqueEmails), totalLines, totalLinesAdded
+
+def printTimeEstimate(gitDirectory):
+    gitlog = getGitLog(gitDirectory)
+    commits = processLog(gitlog)
+    uniqueThings, uniqueUsers, totalLines, totalLineEdits = summarizeLog(commits)
+    print "{} person-weeks of effort\t{} total line-edits by\t{} authors.".format(uniqueThings, totalLineEdits, uniqueUsers)
+    print getGetDiffFromEmptySummary(gitDirectory)[0]
+
+def getAuthors(gitDirectory, outFile=None):
+    gitlog = getGitLog(gitDirectory)
+    commits = processLog(gitlog)        
+    authors = set()
+    emails = set()
+    pairs = set()
     
+    # find graph
+    components = {}
+    nodeToComponentMap = {}
+    for commit in commits:
+        userId = memoizeString(commit.user)
+        emailId = memoizeString(commit.email)
+        addEdge(userId, emailId, components, nodeToComponentMap)
+        
+    
+    print components
+    components = [c for c in components if components[c]] # strip out empty components
+    print "Num unique people: {}".format(len(components))
+    
+    for commit in commits:
+        authors.add((commit.user, memoizeString(commit.user)))
+        emails.add((commit.email, memoizeString(commit.email)))
+        pairs.add((commit.user, commit.email))
+
+    authors = sorted(authors)
+    print "{} authors:".format(len(authors))
+    
+    if outFile:
+        with open(outFile, 'w') as fp:
+            fp.writelines([author + '\n' for author in authors])
+    else:
+        for author in authors:
+            print author[0]
+
+
+    print
+    print "User, email pairs:"
+    for pair in pairs:
+        print "{}\t{}".format(pair[0], pair[1])
+            
+if __name__ == '__main__':
+    getAuthors('.')
