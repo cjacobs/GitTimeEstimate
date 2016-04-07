@@ -26,62 +26,61 @@ def parseInt(s):
 # nodeToComponentMap = {} # map of node ID -> graph component ID
 # componentNodes = {} # map of component ID -> list of nodes
 
-# node1, node2 are ints. Use memoizeString to convert strings to ints
-def addEdge(node1, node2, components, nodeToComponentMap):
-    if node1 not in nodeToComponentMap:
-        # new node, gets its own graph component
-        assert node1 not in components
-        components[node1] = {node1}
-        nodeToComponentMap[node1] = node1
+class Graph(object):
+    def __init__(self):
+        self.components = {}
+        self.nodeToComponentMap = {}
 
-    if node2 not in nodeToComponentMap:
-        # new node, gets its own graph component
-        assert node2 not in components
-        components[node2] = {node2}
-        nodeToComponentMap[node2] = node2
+    # node1, node2 are ints. Use memoizeString to convert strings to ints    
+    def addEdge(self, node1, node2):
+        if node1 not in self.nodeToComponentMap:
+            # new node, gets its own graph component
+            assert node1 not in self.components
+            self.components[node1] = {node1}
+            self.nodeToComponentMap[node1] = node1
 
-    component1 = nodeToComponentMap[node1]
-    component2 = nodeToComponentMap[node2]
-    minComponent = min(component1, component2)
-    maxComponent = max(component1, component2)
+        if node2 not in self.nodeToComponentMap:
+            # new node, gets its own graph component
+            assert node2 not in self.components
+            self.components[node2] = {node2}
+            self.nodeToComponentMap[node2] = node2
 
-    if minComponent == maxComponent:
-        return 
+        component1 = self.nodeToComponentMap[node1]
+        component2 = self.nodeToComponentMap[node2]
+        minComponent = min(component1, component2)
+        maxComponent = max(component1, component2)
+
+        if minComponent == maxComponent:
+            return 
+            
+        self.components[minComponent] |= self.components[maxComponent]
+        for node in self.components[maxComponent]:
+            self.nodeToComponentMap[node] = minComponent
+        self.components[maxComponent] = set()
+
+    def numComponents(self):   
+        return len([c for c in self.components if self.components[c]]) # strip out empty components
         
-    components[minComponent] |= components[maxComponent]
-    for node in components[maxComponent]:
-        nodeToComponentMap[node] = minComponent
-    components[maxComponent] = set()
-    
-def getNodeToComponentMap(componentNodes):
-    result = {}
-    for componentId in componentNodes:
-        nodes = componentNodes[componentId]
-        for node in nodes:
-            result[node] = componentId
-    return result
+    def getComponent(self, node):
+        return self.nodeToComponentMap[node]
+#
+#
+# 
 
-#
-#
-#    
-def getGetDiffFromEmptySummary(gitDirectory):
+# returns # files, line additions
+def getGitDiffStatsFromEmptySummary(gitDirectory):
     emptyTreeSha = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
     handle = Popen(['git', '-C', gitDirectory, 'diff', '--shortstat', emptyTreeSha], shell=True, stdout=PIPE)
     out, err = handle.communicate()
-    return out.split('\n')
+    # "xxx files changed, yyy insertions"
+    parts = out.split(',')
+    return int(parts[0].split()[0]), int (parts[1].split()[0])
 
 def getGitLog(gitDirectory, useCommiters=False):
     personFlag = 'c' if useCommiters else 'a'
     handle = Popen(['git', '-C', gitDirectory, 'log', '--all', '--pretty=format:####%x09%{0}n%x09%{0}e%x09%{0}t'.format(personFlag), '--numstat', '--diff-filter=AM'], shell=True, stdout=PIPE)
     out, err = handle.communicate()
     return out.split('\n')
- 
- 
- 
-
-def getTuple(username, filename, weekId):
-    # return (memoizeString(username), memoizeString(filename), weekId)
-    return (memoizeString(username), weekId)
 
 class FileInfo(object):
     def __init__(self, additions, deletions, filename):
@@ -122,51 +121,50 @@ def processLog(lines):
         commits.append(currentCommit)            
     return commits
         
-def summarizeLog(commits):
+def summarizeLog(commits, excludeDirs=[]):
+    def exclude(filename):
+        for dir in excludeDirs:
+            if filename.startswith(dir):
+                return True
+        return False
+
     uniqueTuples = set()
     uniqueUsers = set()
     uniqueEmails = set()
     totalLinesAdded = 0
-    totalLines = 0
+    totalLinesDeleted = 0
 
-    for commit in commits:
-        currentUser = commit.user
-        currentEmail = commit.email
-        currentTime = commit.time
-        currentWeek = commit.week
-        
-        uniqueUsers.add(currentUser)
-        uniqueEmails.add(currentEmail)
-        for fileInfo in commit.fileInfo:
-            numAdditions = fileInfo.additions
-            numDeletions = fileInfo.deletions
-            filename = fileInfo.filename
-            uniqueTuples.add(getTuple(currentUser, filename, currentWeek))
-            totalLinesAdded += numAdditions
-            totalLines += (numAdditions-numDeletions)
-    return len(uniqueTuples), len(uniqueUsers), totalLines, totalLinesAdded
-
-def printTimeEstimate(gitDirectory, useCommiters=False):
-    gitlog = getGitLog(gitDirectory, useCommiters)
-    commits = processLog(gitlog)
-
-    uniqueThings, uniqueUsers, totalLines, totalLineEdits = summarizeLog(commits)
-    print "{} person-weeks of effort\t{} total line-edits by\t{} authors.".format(uniqueThings, totalLineEdits, uniqueUsers)
-
-    # find graph
-    components = {}
-    nodeToComponentMap = {}
+    ## TODO: use the graph to get unique users
+    graph = Graph()
     for commit in commits:
         userId = memoizeString(commit.user)
         emailId = memoizeString(commit.email)
-        addEdge(userId, emailId, components, nodeToComponentMap)
-
-    components = [c for c in components if components[c]] # strip out empty components
-    numComponents = len(components)
-    print "Num unique authors: {}".format(numComponents)
+        graph.addEdge(userId, emailId)
     
-    print getGetDiffFromEmptySummary(gitDirectory)[0]
+    for commit in commits:
+        uniqueUsers.add(commit.user)
+        uniqueEmails.add(commit.email)
+        for fileInfo in commit.fileInfo:
+            filename = fileInfo.filename
+            if not exclude(filename):
+                currentUserId = graph.getComponent(memoizeString(commit.user))
+                uniqueTuples.add((currentUserId, commit.week))
+                totalLinesAdded += fileInfo.additions
+                totalLinesDeleted += fileInfo.deletions
+                
+    return len(uniqueTuples), graph.numComponents(), totalLinesAdded, totalLinesDeleted
 
+def printTimeEstimate(gitDirectory, useCommiters=False, excludeDirs=[]):
+    gitlog = getGitLog(gitDirectory, useCommiters)
+    commits = processLog(gitlog)
+
+    uniqueThings, uniqueUsers, totalLinesAdded, totalLinesDeleted = summarizeLog(commits, excludeDirs)
+    print "person-weeks of effort: {}\ttotal line-edits: {}\tby {} authors.".format(uniqueThings, totalLinesAdded, uniqueUsers)
+    
+    filesChanged, linesAdded = getGitDiffStatsFromEmptySummary(gitDirectory)
+    print "# files: {}\tlines added: {}".format(filesChanged, linesAdded)
+    print
+    
 def writeLines(lines, outFile):
     if outFile:
         with open(outFile, 'w') as fp:
@@ -180,41 +178,27 @@ def getUniqueComponents(gitDirectory, outFile=None, useCommiters=False):
     commits = processLog(gitlog)        
     
     # find graph
-    components = {}
-    nodeToComponentMap = {}
+    graph = Graph()
     for commit in commits:
         userId = memoizeString(commit.user)
         emailId = memoizeString(commit.email)
-        addEdge(userId, emailId, components, nodeToComponentMap)
+        graph.addEdge(userId, emailId)
 
-    components = [c for c in components if components[c]] # strip out empty components
-    numComponents = len(components)
-    print "Num unique components: {}".format(numComponents)
-    print
+    print "Num unique components: {}".format(graph.numComponents())
     
 def getUsernames(gitDirectory, outFile=None, useCommiters=False):
     gitlog = getGitLog(gitDirectory, useCommiters)
     commits = processLog(gitlog)        
-    users = set()
-    
-    for commit in commits:
-        users.add((commit.user, memoizeString(commit.user)))
-
-    users = sorted(users)
+    users = set([commit.user for commit in commits])
     print "{} unique usernames".format(len(users))
-    writeLines([entry[0] for entry in users], outFile)
+    writeLines(sorted(users), outFile)
             
 def getEmails(gitDirectory, outFile=None):
     gitlog = getGitLog(gitDirectory)
     commits = processLog(gitlog)        
-    emails = set()
-        
-    for commit in commits:
-        emails.add((commit.email, memoizeString(commit.email)))
-
-    emails = sorted(emails)
+    emails = set([commit.email for commit in commits])
     print "{} unique emails".format(len(emails))
-    writeLines([entry[0] for entry in emails], outFile)
+    writeLines(sorted(emails), outFile)
         
 if __name__ == '__main__':
     getUsernames('.')
