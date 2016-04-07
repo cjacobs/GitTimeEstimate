@@ -178,7 +178,6 @@ def writeLines(lines, outFile):
 def getUniqueComponents(gitDirectory, outFile=None, useCommiters=False):
     gitlog = getGitLog(gitDirectory, useCommiters)
     commits = processLog(gitlog)        
-    pairs = set()
     
     # find graph
     components = {}
@@ -193,13 +192,6 @@ def getUniqueComponents(gitDirectory, outFile=None, useCommiters=False):
     print "Num unique components: {}".format(numComponents)
     print
     
-    for commit in commits:
-        pairs.add((commit.user, commit.email))
-
-#    print "User, email pairs:"
-#    for pair in pairs:
-#        print "{}\t{}".format(pair[0], pair[1])
-
 def getUsernames(gitDirectory, outFile=None, useCommiters=False):
     gitlog = getGitLog(gitDirectory, useCommiters)
     commits = processLog(gitlog)        
