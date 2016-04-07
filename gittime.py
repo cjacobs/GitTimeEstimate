@@ -70,11 +70,15 @@ def getGetDiffFromEmptySummary(gitDirectory):
     out, err = handle.communicate()
     return out.split('\n')
 
-def getGitLog(gitDirectory):
-    handle = Popen(['git', '-C', gitDirectory, 'log', '--all', '--pretty=format:####%x09%an%x09%ae%x09%at', '--numstat', '--diff-filter=AM'], shell=True, stdout=PIPE)
+def getGitLog(gitDirectory, useCommiters=False):
+    personFlag = 'c' if useCommiters else 'a'
+    handle = Popen(['git', '-C', gitDirectory, 'log', '--all', '--pretty=format:####%x09%{0}n%x09%{0}e%x09%{0}t'.format(personFlag), '--numstat', '--diff-filter=AM'], shell=True, stdout=PIPE)
     out, err = handle.communicate()
     return out.split('\n')
  
+ 
+ 
+
 def getTuple(username, filename, weekId):
     # return (memoizeString(username), memoizeString(filename), weekId)
     return (memoizeString(username), weekId)
@@ -140,20 +144,40 @@ def summarizeLog(commits):
             uniqueTuples.add(getTuple(currentUser, filename, currentWeek))
             totalLinesAdded += numAdditions
             totalLines += (numAdditions-numDeletions)
-    return len(uniqueTuples), len(uniqueEmails), totalLines, totalLinesAdded
+    return len(uniqueTuples), len(uniqueUsers), totalLines, totalLinesAdded
 
-def printTimeEstimate(gitDirectory):
-    gitlog = getGitLog(gitDirectory)
+def printTimeEstimate(gitDirectory, useCommiters=False):
+    gitlog = getGitLog(gitDirectory, useCommiters)
     commits = processLog(gitlog)
+
     uniqueThings, uniqueUsers, totalLines, totalLineEdits = summarizeLog(commits)
     print "{} person-weeks of effort\t{} total line-edits by\t{} authors.".format(uniqueThings, totalLineEdits, uniqueUsers)
+
+    # find graph
+    components = {}
+    nodeToComponentMap = {}
+    for commit in commits:
+        userId = memoizeString(commit.user)
+        emailId = memoizeString(commit.email)
+        addEdge(userId, emailId, components, nodeToComponentMap)
+
+    components = [c for c in components if components[c]] # strip out empty components
+    numComponents = len(components)
+    print "Num unique authors: {}".format(numComponents)
+    
     print getGetDiffFromEmptySummary(gitDirectory)[0]
 
-def getAuthors(gitDirectory, outFile=None):
-    gitlog = getGitLog(gitDirectory)
+def writeLines(lines, outFile):
+    if outFile:
+        with open(outFile, 'w') as fp:
+            fp.writelines([line + '\n' for line in lines])
+    else:
+        for line in lines:
+            print line
+
+def getUniqueComponents(gitDirectory, outFile=None, useCommiters=False):
+    gitlog = getGitLog(gitDirectory, useCommiters)
     commits = processLog(gitlog)        
-    authors = set()
-    emails = set()
     pairs = set()
     
     # find graph
@@ -163,32 +187,42 @@ def getAuthors(gitDirectory, outFile=None):
         userId = memoizeString(commit.user)
         emailId = memoizeString(commit.email)
         addEdge(userId, emailId, components, nodeToComponentMap)
-        
-    
-    print components
+
     components = [c for c in components if components[c]] # strip out empty components
-    print "Num unique people: {}".format(len(components))
+    numComponents = len(components)
+    print "Num unique components: {}".format(numComponents)
+    print
     
     for commit in commits:
-        authors.add((commit.user, memoizeString(commit.user)))
-        emails.add((commit.email, memoizeString(commit.email)))
         pairs.add((commit.user, commit.email))
 
-    authors = sorted(authors)
-    print "{} authors:".format(len(authors))
+#    print "User, email pairs:"
+#    for pair in pairs:
+#        print "{}\t{}".format(pair[0], pair[1])
+
+def getUsernames(gitDirectory, outFile=None, useCommiters=False):
+    gitlog = getGitLog(gitDirectory, useCommiters)
+    commits = processLog(gitlog)        
+    users = set()
     
-    if outFile:
-        with open(outFile, 'w') as fp:
-            fp.writelines([author + '\n' for author in authors])
-    else:
-        for author in authors:
-            print author[0]
+    for commit in commits:
+        users.add((commit.user, memoizeString(commit.user)))
 
-
-    print
-    print "User, email pairs:"
-    for pair in pairs:
-        print "{}\t{}".format(pair[0], pair[1])
+    users = sorted(users)
+    print "{} unique usernames".format(len(users))
+    writeLines([entry[0] for entry in users], outFile)
             
+def getEmails(gitDirectory, outFile=None):
+    gitlog = getGitLog(gitDirectory)
+    commits = processLog(gitlog)        
+    emails = set()
+        
+    for commit in commits:
+        emails.add((commit.email, memoizeString(commit.email)))
+
+    emails = sorted(emails)
+    print "{} unique emails".format(len(emails))
+    writeLines([entry[0] for entry in emails], outFile)
+        
 if __name__ == '__main__':
-    getAuthors('.')
+    getUsernames('.')
